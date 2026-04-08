@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gke-vpc-fwr-controller
+  namespace: gke-vpc-fwr-controller
+  labels:
+    app: gke-vpc-fwr-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gke-vpc-fwr-controller
+  template:
+    metadata:
+      labels:
+        app: gke-vpc-fwr-controller
+    spec:
+      serviceAccountName: gke-vpc-fwr-controller
+      containers:
+        - name: controller
+          image: gke-vpc-fwr-rules-controller:latest
+          args:
+            - --leader-elect=true
+            - --health-probe-bind-address=:8081
+            - --metrics-bind-address=:8080
+          ports:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault

@@ -1,0 +1,5 @@
+bin/
+controller
+*.exe
+*.test
+*.out
