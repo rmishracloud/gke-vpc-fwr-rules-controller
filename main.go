@@ -80,7 +80,7 @@ func main() {
 	}
 	defer containerClient.Close()
 
-	clusterInfo, err := gcp.GetClusterInfo(ctx, containerClient, projectID, zone, clusterName)
+	clusterInfo, err := gcp.GetClusterInfo(ctx, containerClient, projectID, region, clusterName)
 	if err != nil {
 		setupLog.Error(err, "failed to get cluster info")
 		os.Exit(1)
