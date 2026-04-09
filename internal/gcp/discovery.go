@@ -60,7 +60,9 @@ func GetProxyOnlySubnetCIDR(ctx context.Context, client *compute.SubnetworksClie
 	})
 
 	for {
+
 		subnet, err := it.Next()
+		fmt.Println("subnet:::::>>>", subnet.Name)
 		if err == iterator.Done {
 			break
 		}
