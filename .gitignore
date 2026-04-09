@@ -1,5 +1,5 @@
 bin/
-controller
+/controller
 *.exe
 *.test
 *.out
