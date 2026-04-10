@@ -25,7 +25,7 @@ When such a Gateway exists, it automatically creates two VPC firewall rules:
 | Protocol | TCP (all ports) |
 | Priority | 1000 |
 
-**2. Health check rule** (`gke-<cluster-name>-gw-proxy-to-pods-hc`) — created in the **service project**:
+**2. Health check rule** (`gke-<cluster-name>-hc`) — created in the **host project**:
 
 | Field | Value |
 |-------|-------|
@@ -63,15 +63,10 @@ When all matching Gateways are deleted, both firewall rules are cleaned up autom
 │  │ (REGIONAL_MANAGED_  │    │ gke-<cluster>-gw-      │  │
 │  │  PROXY)             │    │ proxy-to-pods          │  │
 │  └─────────────────────┘    └────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
-                                        │
-                                        ▼
-┌─────────────────────────────────────────────────────────┐
-│ Service Project                                         │
 │                                                         │
 │  ┌────────────────────────────────────────────────────┐ │
 │  │ Firewall Rule (Health Check)                       │ │
-│  │ gke-<cluster>-gw-proxy-to-pods-hc                  │ │
+│  │ gke-<cluster>-hc                  │ │
 │  │ Source: 35.191.0.0/16, 130.211.0.0/22              │ │
 │  └────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────┘
@@ -211,9 +206,8 @@ args:
 
 | Scope | Role | Purpose |
 |-------|------|---------|
-| Host project | `roles/compute.securityAdmin` | Create/update/delete proxy-only subnet firewall rule |
+| Host project | `roles/compute.securityAdmin` | Create/update/delete firewall rules (proxy-only subnet and health check) |
 | Host project | `roles/compute.networkViewer` | List subnets to find proxy-only subnet |
-| Service project | `roles/compute.securityAdmin` | Create/update/delete health check firewall rule |
 | Service project | `roles/container.clusterViewer` | Read cluster network and pod CIDR |
 | Host project | `roles/iam.workloadIdentityUser` | Allow K8s SA to act as GCP SA |
 
@@ -229,12 +223,14 @@ The controller requires cluster-wide read access to Gateway resources:
 
 ## Uninstalling
 
-To cleanly remove the controller and its firewall rule:
+To cleanly remove the controller and its firewall rules:
 
-1. Delete all matching Gateway resources first (this triggers the controller to clean up the firewall rule).
-2. Verify the firewall rule is gone:
+1. Delete all matching Gateway resources first (this triggers the controller to clean up both firewall rules).
+2. Verify the firewall rules are gone:
    ```bash
    gcloud compute firewall-rules describe gke-<cluster-name>-gw-proxy-to-pods \
+     --project=$HOST_PROJECT
+   gcloud compute firewall-rules describe gke-<cluster-name>-gw-proxy-to-pods-hc \
      --project=$HOST_PROJECT
    ```
 3. Remove the controller:
@@ -242,9 +238,11 @@ To cleanly remove the controller and its firewall rule:
    kubectl delete -f deploy/
    ```
 
-If the controller is removed before the Gateways, the firewall rule will be orphaned. It can be manually deleted:
+If the controller is removed before the Gateways, the firewall rules will be orphaned. They can be manually deleted:
 
 ```bash
 gcloud compute firewall-rules delete gke-<cluster-name>-gw-proxy-to-pods \
+  --project=$HOST_PROJECT
+gcloud compute firewall-rules delete gke-<cluster-name>-hc \
   --project=$HOST_PROJECT
 ```

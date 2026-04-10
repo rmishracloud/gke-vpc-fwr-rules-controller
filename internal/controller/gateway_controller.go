@@ -79,7 +79,7 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			Network:      r.Config.Network,
 			SourceRanges: []string{"35.191.0.0/16", "130.211.0.0/22"},
 			DestRanges:   []string{r.Config.PodCIDR},
-			Project:      r.Config.Project,
+			Project:      r.Config.HostProject,
 		}
 
 		if err := r.FirewallMgr.EnsureFirewallRule(ctx, params); err != nil {
