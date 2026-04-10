@@ -69,12 +69,7 @@ func GetProxyOnlySubnetCIDR(ctx context.Context, client *compute.SubnetworksClie
 			return "", fmt.Errorf("listing subnets: %w", err)
 		}
 
-		netURI, err := parseNetworkFromSelfLink(subnet.GetNetwork())
-		if err != nil {
-			return "", fmt.Errorf("could not parse the network URI from self-link for comparison %s", subnet.GetNetwork())
-		}
-
-		if subnet.GetPurpose() == "REGIONAL_MANAGED_PROXY" && netURI == networkURL {
+		if subnet.GetPurpose() == "REGIONAL_MANAGED_PROXY" && networkSelfLinksMatch(subnet.GetNetwork(), networkURL) {
 			return subnet.GetIpCidrRange(), nil
 		}
 	}
@@ -95,13 +90,20 @@ func parseProjectFromSelfLink(selfLink string) (string, error) {
 	return "", fmt.Errorf("could not parse project from self-link: %s", selfLink)
 }
 
-// Expected format: projects/{project}/global/networks/{name}
-func parseNetworkFromSelfLink(selfLink string) (string, error) {
+// networkSelfLinksMatch compares two network references that may be in different formats:
+// - Full URL: https://www.googleapis.com/compute/v1/projects/{project}/global/networks/{name}
+// - Short form: projects/{project}/global/networks/{name}
+// It normalizes both to "projects/{project}/global/networks/{name}" before comparing.
+func networkSelfLinksMatch(a, b string) bool {
+	return normalizeNetworkSelfLink(a) == normalizeNetworkSelfLink(b)
+}
+
+func normalizeNetworkSelfLink(selfLink string) string {
 	parts := strings.Split(selfLink, "/")
 	for i, part := range parts {
-		if part == "projects" && i+1 < len(parts) {
-			return parts[i+1], nil
+		if part == "projects" && i+3 < len(parts) {
+			return strings.Join(parts[i:], "/")
 		}
 	}
-	return "", fmt.Errorf("could not parse project from self-link: %s", selfLink)
+	return selfLink
 }
