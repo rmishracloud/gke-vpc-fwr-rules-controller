@@ -62,7 +62,6 @@ func GetProxyOnlySubnetCIDR(ctx context.Context, client *compute.SubnetworksClie
 	for {
 
 		subnet, err := it.Next()
-		fmt.Println("subnet:::::>>>", subnet.Name)
 		if err == iterator.Done {
 			break
 		}
@@ -70,7 +69,12 @@ func GetProxyOnlySubnetCIDR(ctx context.Context, client *compute.SubnetworksClie
 			return "", fmt.Errorf("listing subnets: %w", err)
 		}
 
-		if subnet.GetPurpose() == "REGIONAL_MANAGED_PROXY" && subnet.GetNetwork() == networkURL {
+		netURI, err := parseNetworkFromSelfLink(subnet.GetNetwork())
+		if err != nil {
+			return "", fmt.Errorf("could not parse the network URI from self-link for comparison %s", subnet.GetNetwork())
+		}
+
+		if subnet.GetPurpose() == "REGIONAL_MANAGED_PROXY" && netURI == networkURL {
 			return subnet.GetIpCidrRange(), nil
 		}
 	}
@@ -82,6 +86,17 @@ func GetProxyOnlySubnetCIDR(ctx context.Context, client *compute.SubnetworksClie
 // Expected format: projects/{project}/global/networks/{name} or
 // https://www.googleapis.com/compute/v1/projects/{project}/global/networks/{name}
 func parseProjectFromSelfLink(selfLink string) (string, error) {
+	parts := strings.Split(selfLink, "/")
+	for i, part := range parts {
+		if part == "projects" && i+1 < len(parts) {
+			return parts[i+1], nil
+		}
+	}
+	return "", fmt.Errorf("could not parse project from self-link: %s", selfLink)
+}
+
+// Expected format: projects/{project}/global/networks/{name}
+func parseNetworkFromSelfLink(selfLink string) (string, error) {
 	parts := strings.Split(selfLink, "/")
 	for i, part := range parts {
 		if part == "projects" && i+1 < len(parts) {
