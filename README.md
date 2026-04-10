@@ -13,7 +13,9 @@ The controller watches for Kubernetes `Gateway` resources with the following Gat
 - `gke-l7-rilb` (internal Application Load Balancer)
 - `gke-l7-regional-external-managed` (regional external Application Load Balancer)
 
-When such a Gateway exists, it automatically creates a VPC firewall rule in the **shared VPC host project** with:
+When such a Gateway exists, it automatically creates two VPC firewall rules:
+
+**1. Proxy-only subnet rule** (`gke-<cluster-name>-gw-proxy-to-pods`) — created in the **host project**:
 
 | Field | Value |
 |-------|-------|
@@ -23,9 +25,19 @@ When such a Gateway exists, it automatically creates a VPC firewall rule in the 
 | Protocol | TCP (all ports) |
 | Priority | 1000 |
 
-The firewall rule is named `gke-<cluster-name>-gw-proxy-to-pods` and is fully idempotent — creating, updating, or removing it based on the presence of matching Gateway resources.
+**2. Health check rule** (`gke-<cluster-name>-gw-proxy-to-pods-hc`) — created in the **service project**:
 
-When all matching Gateways are deleted, the firewall rule is cleaned up automatically.
+| Field | Value |
+|-------|-------|
+| Direction | `INGRESS` |
+| Source ranges | `35.191.0.0/16`, `130.211.0.0/22` (Google health check ranges) |
+| Destination ranges | Cluster pod CIDR |
+| Protocol | TCP (all ports) |
+| Priority | 1000 |
+
+Both rules are fully idempotent — created, updated, or removed based on the presence of matching Gateway resources.
+
+When all matching Gateways are deleted, both firewall rules are cleaned up automatically.
 
 ## Architecture
 
@@ -52,14 +64,25 @@ When all matching Gateways are deleted, the firewall rule is cleaned up automati
 │  │  PROXY)             │    │ proxy-to-pods          │  │
 │  └─────────────────────┘    └────────────────────────┘  │
 └─────────────────────────────────────────────────────────┘
+                                        │
+                                        ▼
+┌─────────────────────────────────────────────────────────┐
+│ Service Project                                         │
+│                                                         │
+│  ┌────────────────────────────────────────────────────┐ │
+│  │ Firewall Rule (Health Check)                       │ │
+│  │ gke-<cluster>-gw-proxy-to-pods-hc                  │ │
+│  │ Source: 35.191.0.0/16, 130.211.0.0/22              │ │
+│  └────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ### Reconciliation Flow
 
 1. On any Gateway create/update/delete event (or periodic resync), the controller lists all Gateways across all namespaces.
 2. Filters to those matching the supported GatewayClasses.
-3. If any matching Gateways exist: discovers the proxy-only subnet CIDR and ensures the firewall rule is present and correct.
-4. If no matching Gateways exist: deletes the firewall rule.
+3. If any matching Gateways exist: discovers the proxy-only subnet CIDR and ensures both firewall rules (proxy-only subnet and health check) are present and correct.
+4. If no matching Gateways exist: deletes both firewall rules.
 5. Periodic resync (default: 20 minutes) ensures the firewall rule is self-healing even if modified or deleted out-of-band.
 
 ### Discovery
@@ -188,8 +211,9 @@ args:
 
 | Scope | Role | Purpose |
 |-------|------|---------|
-| Host project | `roles/compute.securityAdmin` | Create/update/delete firewall rules |
+| Host project | `roles/compute.securityAdmin` | Create/update/delete proxy-only subnet firewall rule |
 | Host project | `roles/compute.networkViewer` | List subnets to find proxy-only subnet |
+| Service project | `roles/compute.securityAdmin` | Create/update/delete health check firewall rule |
 | Service project | `roles/container.clusterViewer` | Read cluster network and pod CIDR |
 | Host project | `roles/iam.workloadIdentityUser` | Allow K8s SA to act as GCP SA |
 

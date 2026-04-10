@@ -71,13 +71,33 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			logger.Error(err, "failed to ensure firewall rule", "name", firewallName)
 			return ctrl.Result{}, err
 		}
-		logger.Info("firewall rule ensured", "name", firewallName, "matchingGateways", matchCount)
-	} else {
-		if err := r.FirewallMgr.DeleteFirewallRule(ctx, r.Config.HostProject, firewallName); err != nil {
-			logger.Error(err, "failed to delete firewall rule", "name", firewallName)
+		logger.Info("firewall rule ensured for proxy-only subnet", "name", firewallName, "matchingGateways", matchCount)
+		logger.Info("creating rule for healthcheck ranges", "name", firewallName+"-hc", "matchingGateways", matchCount)
+
+		params = gcp.FirewallParams{
+			Name:         firewallName + "-hc",
+			Network:      r.Config.Network,
+			SourceRanges: []string{"35.191.0.0/16", "130.211.0.0/22"},
+			DestRanges:   []string{r.Config.PodCIDR},
+			Project:      r.Config.Project,
+		}
+
+		if err := r.FirewallMgr.EnsureFirewallRule(ctx, params); err != nil {
+			logger.Error(err, "failed to ensure firewall rule for health check ranges", "name", firewallName+"-hc")
 			return ctrl.Result{}, err
 		}
-		logger.Info("no matching gateways, firewall rule removed", "name", firewallName)
+		logger.Info("firewall rules for healthcheck ranges ensured", "name", firewallName+"-hc", "matchingGateways", matchCount)
+
+	} else {
+		if err := r.FirewallMgr.DeleteFirewallRule(ctx, r.Config.HostProject, firewallName); err != nil {
+			logger.Error(err, "failed to delte firewall rule for proxy subnets", "name", firewallName)
+			return ctrl.Result{}, err
+		}
+		if err := r.FirewallMgr.DeleteFirewallRule(ctx, r.Config.HostProject, firewallName+"-hc"); err != nil {
+			logger.Error(err, "failed to delte firewall rule for health checks", "name", firewallName)
+			return ctrl.Result{}, err
+		}
+		logger.Info("no matching gateways, firewall rules removed", "name", firewallName)
 	}
 
 	return ctrl.Result{}, nil
