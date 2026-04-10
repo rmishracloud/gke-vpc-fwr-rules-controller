@@ -78,7 +78,7 @@ func (f *FirewallManager) insertFirewall(ctx context.Context, p FirewallParams) 
 			Allowed: []*computepb.Allowed{{
 				IPProtocol: proto.String("tcp"),
 			}},
-			Description: proto.String("Auto-managed by gke-vpc-fwr-rules-controller. Allows proxy-only subnet to reach pods for GKE Gateway."),
+			Description: proto.String("Auto-managed by gke-vpc-fwr-rules-controller"),
 		},
 	})
 	if err != nil {
