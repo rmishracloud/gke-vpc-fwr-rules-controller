@@ -84,6 +84,17 @@ When all matching Gateways are deleted, both firewall rules are cleaned up autom
 
 At startup, the controller reads its identity from the **GCP metadata server** (project, zone, cluster name), then calls the **GKE Container API** to resolve the VPC network, pod CIDR, and shared VPC host project. The proxy-only subnet is discovered via the **Compute Subnets API** and cached for 5 minutes.
 
+## Multi-Cluster Behavior
+
+The controller is designed to run independently in each GKE cluster and coexist safely with other instances managing the same shared VPC host project:
+
+- **Per-cluster ownership via naming**: Firewall rules are prefixed with the cluster name (`gke-<cluster-name>-gw-proxy-to-pods` and `gke-<cluster-name>-hc`), so each controller instance only touches its own rules.
+- **Scoped destination ranges**: Each rule's destination is restricted to that cluster's own pod CIDR, so the blast radius is limited to a single cluster even though the proxy-only subnet source is shared across all clusters in a region.
+- **Regional proxy subnet discovery**: Each controller discovers the proxy-only subnet for its own region and network, so clusters in different regions of the same VPC each get the correct regional source range.
+- **Net result**: N clusters in the same shared VPC will produce 2N firewall rules in the host project — two per cluster — all sharing the regional proxy-only subnet as source but each scoped to a unique pod CIDR.
+
+> **Caveat — duplicate cluster names**: If two clusters share the same name (GKE permits this across regions or projects), their controllers will generate identical firewall rule names and fight over ownership. Ensure cluster names are unique across any clusters that share the same VPC host project, or fork the controller to include the region in the rule name.
+
 ## Prerequisites
 
 - GKE cluster in a **shared VPC** with Workload Identity enabled
