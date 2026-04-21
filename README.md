@@ -103,7 +103,9 @@ The controller is designed to run independently in each GKE cluster and coexist 
 
 ## Setup
 
-### 1. Create a GCP Service Account in the Host Project
+### 1. Create a GCP Service Account in the Service Project
+
+The service account lives in the **service project** (the same project as the GKE cluster). This keeps identity management with the team that owns the cluster while still granting the SA explicit, scoped permissions to manage firewall rules on the shared VPC in the host project.
 
 ```bash
 export HOST_PROJECT=<your-host-project>
@@ -111,47 +113,70 @@ export SERVICE_PROJECT=<your-service-project>
 export GCP_SA_NAME=gke-vpc-fwr-controller
 
 gcloud iam service-accounts create $GCP_SA_NAME \
-  --project=$HOST_PROJECT \
+  --project=$SERVICE_PROJECT \
   --display-name="GKE VPC Firewall Rules Controller"
 ```
 
+The SA's fully-qualified email is `$GCP_SA_NAME@$SERVICE_PROJECT.iam.gserviceaccount.com`. Note that it lives in the service project but will be granted permissions on resources in the host project.
+
 ### 2. Grant IAM Roles
 
-The GCP service account needs permissions in **both** the host project (to manage firewall rules and read subnets) and the service project (to read cluster info).
+The service-project SA needs permissions in **both** the host project (to manage firewall rules and read subnets on the shared VPC) and the service project (to read its own cluster info).
 
 **On the shared VPC host project** — firewall management and subnet discovery:
 
 ```bash
 # Firewall rule management
 gcloud projects add-iam-policy-binding $HOST_PROJECT \
-  --member="serviceAccount:$GCP_SA_NAME@$HOST_PROJECT.iam.gserviceaccount.com" \
+  --member="serviceAccount:$GCP_SA_NAME@$SERVICE_PROJECT.iam.gserviceaccount.com" \
   --role="roles/compute.securityAdmin"
 
 # Subnet discovery (to find proxy-only subnet)
 gcloud projects add-iam-policy-binding $HOST_PROJECT \
-  --member="serviceAccount:$GCP_SA_NAME@$HOST_PROJECT.iam.gserviceaccount.com" \
+  --member="serviceAccount:$GCP_SA_NAME@$SERVICE_PROJECT.iam.gserviceaccount.com" \
   --role="roles/compute.networkViewer"
 ```
 
-> **Least-privilege alternative:** Instead of `roles/compute.securityAdmin`, create a custom role with only:
+> **Least-privilege alternative:** Instead of `roles/compute.securityAdmin`, create a custom role in the host project with only:
 > `compute.firewalls.create`, `compute.firewalls.delete`, `compute.firewalls.get`, `compute.firewalls.update`, `compute.networks.updatePolicy`
+>
+> GCP legacy VPC firewall rules are a project-level resource, so the role must be granted at the host project level — there is no VPC-resource-level binding available for `compute.firewalls.*`. The custom role keeps the verb set minimal.
+
+**Tightening blast radius with IAM Conditions:**
+
+Although the role binding is project-scoped, you can attach an **IAM Condition** so it only applies to firewall rules the controller owns (names starting with `gke-<cluster-name>-`). This prevents the SA from touching any other firewall rule in the host project:
+
+```bash
+export CLUSTER_NAME=<your-gke-cluster-name>
+
+gcloud projects add-iam-policy-binding $HOST_PROJECT \
+  --member="serviceAccount:$GCP_SA_NAME@$SERVICE_PROJECT.iam.gserviceaccount.com" \
+  --role="roles/compute.securityAdmin" \
+  --condition="expression=resource.name.startsWith('projects/$HOST_PROJECT/global/firewalls/gke-$CLUSTER_NAME-'),title=only-this-clusters-firewalls,description=Restrict to firewall rules managed by this cluster's controller"
+```
+
+With this condition, the SA can only act on `gke-<cluster>-gw-proxy-to-pods` and `gke-<cluster>-hc` — and nothing else in the host project, even though the role itself is project-scoped.
+
+> **Note:** `compute.networkViewer` cannot be restricted this way because the controller needs to `List()` subnets across the region to discover the proxy-only subnet, and list operations don't have a per-resource `resource.name` to condition on. Keep it as a plain project-level binding, or grant only `compute.subnetworks.list` via a custom role for a slightly smaller surface.
+
+**Alternative — Network Firewall Policies:** GCP's newer Network Firewall Policy API supports true resource-level IAM on each policy, meaning you could grant the controller's SA permissions on a single policy resource rather than the whole project. That would require changing the controller to manage policy rules instead of VPC firewall rules — a non-trivial rewrite not currently implemented.
 
 **On the service project** — cluster info discovery:
 
 ```bash
 gcloud projects add-iam-policy-binding $SERVICE_PROJECT \
-  --member="serviceAccount:$GCP_SA_NAME@$HOST_PROJECT.iam.gserviceaccount.com" \
+  --member="serviceAccount:$GCP_SA_NAME@$SERVICE_PROJECT.iam.gserviceaccount.com" \
   --role="roles/container.clusterViewer"
 ```
 
 ### 3. Bind Workload Identity
 
-Link the Kubernetes service account to the GCP service account so the controller pod can authenticate as the GCP SA:
+Link the Kubernetes service account to the GCP service account so the controller pod can authenticate as the GCP SA. Because the GCP SA now lives in the service project (same project as the cluster), the Workload Identity binding is entirely within the service project:
 
 ```bash
 gcloud iam service-accounts add-iam-policy-binding \
-  $GCP_SA_NAME@$HOST_PROJECT.iam.gserviceaccount.com \
-  --project=$HOST_PROJECT \
+  $GCP_SA_NAME@$SERVICE_PROJECT.iam.gserviceaccount.com \
+  --project=$SERVICE_PROJECT \
   --role="roles/iam.workloadIdentityUser" \
   --member="serviceAccount:$SERVICE_PROJECT.svc.id.goog[gke-vpc-fwr-controller/gke-vpc-fwr-controller]"
 ```
@@ -164,7 +189,7 @@ Edit `deploy/serviceaccount.yaml` and replace the annotation with your GCP servi
 
 ```yaml
 annotations:
-  iam.gke.io/gcp-service-account: gke-vpc-fwr-controller@<HOST_PROJECT>.iam.gserviceaccount.com
+  iam.gke.io/gcp-service-account: gke-vpc-fwr-controller@<SERVICE_PROJECT>.iam.gserviceaccount.com
 ```
 
 ### 5. Build and Push the Image
@@ -215,12 +240,14 @@ args:
 
 ## IAM Permissions Summary
 
-| Scope | Role | Purpose |
-|-------|------|---------|
+The GCP service account lives in the **service project** and is granted the following roles. `roles/iam.workloadIdentityUser` is bound on the SA itself (in the service project), not at a project level.
+
+| Granted On | Role | Purpose |
+|------------|------|---------|
 | Host project | `roles/compute.securityAdmin` | Create/update/delete firewall rules (proxy-only subnet and health check) |
 | Host project | `roles/compute.networkViewer` | List subnets to find proxy-only subnet |
 | Service project | `roles/container.clusterViewer` | Read cluster network and pod CIDR |
-| Host project | `roles/iam.workloadIdentityUser` | Allow K8s SA to act as GCP SA |
+| Service-project SA | `roles/iam.workloadIdentityUser` | Allow the K8s SA to impersonate the GCP SA |
 
 ## Kubernetes RBAC
 
